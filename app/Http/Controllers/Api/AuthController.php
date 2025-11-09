@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
@@ -15,37 +17,65 @@ class AuthController extends Controller
      */
     public function register(Request $request)
     {
-        // Check if user already exists
-        $existingUser = User::where('email', $request->email)->first();
-        
-        if ($existingUser) {
+        try {
+            $validated = $request->validate([
+                'name' => 'required|string|max:255',
+                'email' => 'required|string|email|max:255|unique:users',
+                'password' => 'required|string|min:8|confirmed',
+            ]);
+
+            // Check if user already exists
+            $existingUser = User::where('email', $validated['email'])->first();
+            
+            if ($existingUser) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'User already exists',
+                    'error' => 'A user with this email address already exists.',
+                ], 409);
+            }
+
+            DB::beginTransaction();
+
+            $user = User::create([
+                'name' => $validated['name'],
+                'email' => $validated['email'],
+                'password' => Hash::make($validated['password']),
+                'role' => User::ROLE_USER, // Default role is user
+            ]);
+
+            $token = $user->createToken('auth_token')->plainTextToken;
+
+            DB::commit();
+
             return response()->json([
-                'message' => 'User already exists',
-                'error' => 'A user with this email address already exists.',
-            ], 409);
+                'success' => true,
+                'message' => 'User registered successfully',
+                'data' => [
+                    'user' => $user,
+                    'access_token' => $token,
+                    'token_type' => 'Bearer',
+                ]
+            ], 201);
+        } catch (ValidationException $e) {
+            DB::rollBack();
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'error' => 'The provided data is invalid.',
+                'errors' => $e->errors(),
+            ], 422);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Error registering user: ' . $e->getMessage());
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Registration failed',
+                'error' => 'An error occurred while registering. Please try again later.',
+            ], 500);
         }
-
-        $request->validate([
-            'name' => 'required|string|max:255',
-            'email' => 'required|string|email|max:255',
-            'password' => 'required|string|min:8|confirmed',
-        ]);
-
-        $user = User::create([
-            'name' => $request->name,
-            'email' => $request->email,
-            'password' => Hash::make($request->password),
-            'role' => User::ROLE_USER, // Default role is user
-        ]);
-
-        $token = $user->createToken('auth_token')->plainTextToken;
-
-        return response()->json([
-            'message' => 'User registered successfully',
-            'user' => $user,
-            'access_token' => $token,
-            'token_type' => 'Bearer',
-        ], 201);
     }
 
     /**
@@ -53,27 +83,49 @@ class AuthController extends Controller
      */
     public function login(Request $request)
     {
-        $request->validate([
-            'email' => 'required|email',
-            'password' => 'required',
-        ]);
-
-        $user = User::where('email', $request->email)->first();
-
-        if (!$user || !Hash::check($request->password, $user->password)) {
-            throw ValidationException::withMessages([
-                'email' => ['The provided credentials are incorrect.'],
+        try {
+            $validated = $request->validate([
+                'email' => 'required|email',
+                'password' => 'required',
             ]);
+
+            $user = User::where('email', $validated['email'])->first();
+
+            if (!$user || !Hash::check($validated['password'], $user->password)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Invalid credentials',
+                    'error' => 'The provided credentials are incorrect.',
+                ], 401);
+            }
+
+            $token = $user->createToken('auth_token')->plainTextToken;
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Login successful',
+                'data' => [
+                    'user' => $user,
+                    'access_token' => $token,
+                    'token_type' => 'Bearer',
+                ]
+            ], 200);
+        } catch (ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'error' => 'The provided data is invalid.',
+                'errors' => $e->errors(),
+            ], 422);
+        } catch (\Exception $e) {
+            Log::error('Error logging in user: ' . $e->getMessage());
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Login failed',
+                'error' => 'An error occurred while logging in. Please try again later.',
+            ], 500);
         }
-
-        $token = $user->createToken('auth_token')->plainTextToken;
-
-        return response()->json([
-            'message' => 'Login successful',
-            'user' => $user,
-            'access_token' => $token,
-            'token_type' => 'Bearer',
-        ]);
     }
 
     /**
@@ -81,11 +133,30 @@ class AuthController extends Controller
      */
     public function logout(Request $request)
     {
-        $request->user()->currentAccessToken()->delete();
+        try {
+            if (!$request->user()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthenticated',
+                    'error' => 'User not authenticated.',
+                ], 401);
+            }
 
-        return response()->json([
-            'message' => 'Logged out successfully',
-        ]);
+            $request->user()->currentAccessToken()->delete();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Logged out successfully',
+            ], 200);
+        } catch (\Exception $e) {
+            Log::error('Error logging out user: ' . $e->getMessage());
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Logout failed',
+                'error' => 'An error occurred while logging out. Please try again later.',
+            ], 500);
+        }
     }
 
     /**
@@ -93,9 +164,31 @@ class AuthController extends Controller
      */
     public function user(Request $request)
     {
-        return response()->json([
-            'user' => $request->user(),
-        ]);
+        try {
+            if (!$request->user()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthenticated',
+                    'error' => 'User not authenticated.',
+                ], 401);
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => 'User retrieved successfully',
+                'data' => [
+                    'user' => $request->user(),
+                ]
+            ], 200);
+        } catch (\Exception $e) {
+            Log::error('Error fetching user: ' . $e->getMessage());
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to retrieve user',
+                'error' => 'An error occurred while fetching user information. Please try again later.',
+            ], 500);
+        }
     }
 
     /**
@@ -103,34 +196,78 @@ class AuthController extends Controller
      */
     public function update(Request $request)
     {
-        $user = $request->user();
+        try {
+            $user = $request->user();
 
-        $request->validate([
-            'name' => 'sometimes|string|max:255',
-            'email' => 'sometimes|string|email|max:255|unique:users,email,' . $user->id,
-            'password' => 'sometimes|string|min:8|confirmed',
-        ]);
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthenticated',
+                    'error' => 'User not authenticated.',
+                ], 401);
+            }
 
-        $updateData = [];
-        
-        if ($request->has('name')) {
-            $updateData['name'] = $request->name;
+            $validated = $request->validate([
+                'name' => 'sometimes|string|max:255',
+                'email' => 'sometimes|string|email|max:255|unique:users,email,' . $user->id,
+                'password' => 'sometimes|string|min:8|confirmed',
+            ]);
+
+            DB::beginTransaction();
+
+            $updateData = [];
+            
+            if (isset($validated['name'])) {
+                $updateData['name'] = $validated['name'];
+            }
+            
+            if (isset($validated['email'])) {
+                $updateData['email'] = $validated['email'];
+            }
+            
+            if (isset($validated['password'])) {
+                $updateData['password'] = Hash::make($validated['password']);
+            }
+
+            if (empty($updateData)) {
+                DB::rollBack();
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No data to update',
+                    'error' => 'Please provide at least one field to update.',
+                ], 400);
+            }
+
+            $user->update($updateData);
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'User updated successfully',
+                'data' => [
+                    'user' => $user->fresh(),
+                ]
+            ], 200);
+        } catch (ValidationException $e) {
+            DB::rollBack();
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'error' => 'The provided data is invalid.',
+                'errors' => $e->errors(),
+            ], 422);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Error updating user: ' . $e->getMessage());
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to update user',
+                'error' => 'An error occurred while updating user information. Please try again later.',
+            ], 500);
         }
-        
-        if ($request->has('email')) {
-            $updateData['email'] = $request->email;
-        }
-        
-        if ($request->has('password')) {
-            $updateData['password'] = Hash::make($request->password);
-        }
-
-        $user->update($updateData);
-
-        return response()->json([
-            'message' => 'User updated successfully',
-            'user' => $user->fresh(),
-        ]);
     }
 
     /**
@@ -138,17 +275,40 @@ class AuthController extends Controller
      */
     public function delete(Request $request)
     {
-        $user = $request->user();
-        
-        // Revoke all tokens
-        $user->tokens()->delete();
-        
-        // Delete user
-        $user->delete();
+        try {
+            $user = $request->user();
 
-        return response()->json([
-            'message' => 'User deleted successfully',
-        ]);
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthenticated',
+                    'error' => 'User not authenticated.',
+                ], 401);
+            }
+
+            DB::beginTransaction();
+            
+            // Revoke all tokens
+            $user->tokens()->delete();
+            
+            // Delete user
+            $user->delete();
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'User deleted successfully',
+            ], 200);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Error deleting user: ' . $e->getMessage());
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to delete user',
+                'error' => 'An error occurred while deleting the user. Please try again later.',
+            ], 500);
+        }
     }
 }
-

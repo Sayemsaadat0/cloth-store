@@ -5,6 +5,9 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Category;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\ValidationException;
 
 class CategoryController extends Controller
 {
@@ -13,13 +16,26 @@ class CategoryController extends Controller
      */
     public function index()
     {
-        $categories = Category::all();
-        
-        return response()->json([
-            'message' => 'Categories retrieved successfully',
-            'categories' => $categories,
-            'total' => $categories->count(),
-        ]);
+        try {
+            $categories = Category::all();
+            
+            return response()->json([
+                'success' => true,
+                'message' => 'Categories retrieved successfully',
+                'data' => [
+                    'categories' => $categories,
+                    'total' => $categories->count(),
+                ]
+            ], 200);
+        } catch (\Exception $e) {
+            Log::error('Error fetching categories: ' . $e->getMessage());
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to retrieve categories',
+                'error' => 'An error occurred while fetching categories. Please try again later.',
+            ], 500);
+        }
     }
 
     /**
@@ -27,20 +43,47 @@ class CategoryController extends Controller
      */
     public function store(Request $request)
     {
-        $request->validate([
-            'name' => 'required|string|max:255|unique:categories',
-            'status' => 'sometimes|in:active,inactive',
-        ]);
+        try {
+            $validated = $request->validate([
+                'name' => 'required|string|max:255|unique:categories',
+                'status' => 'sometimes|in:active,inactive',
+            ]);
 
-        $category = Category::create([
-            'name' => $request->name,
-            'status' => $request->status ?? Category::STATUS_ACTIVE,
-        ]);
+            DB::beginTransaction();
 
-        return response()->json([
-            'message' => 'Category created successfully',
-            'category' => $category,
-        ], 201);
+            $category = Category::create([
+                'name' => $validated['name'],
+                'status' => $validated['status'] ?? Category::STATUS_ACTIVE,
+            ]);
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Category created successfully',
+                'data' => [
+                    'category' => $category,
+                ]
+            ], 201);
+        } catch (ValidationException $e) {
+            DB::rollBack();
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'error' => 'The provided data is invalid.',
+                'errors' => $e->errors(),
+            ], 422);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Error creating category: ' . $e->getMessage());
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to create category',
+                'error' => 'An error occurred while creating the category. Please try again later.',
+            ], 500);
+        }
     }
 
     /**
@@ -48,18 +91,41 @@ class CategoryController extends Controller
      */
     public function show($id)
     {
-        $category = Category::find($id);
-        
-        if (!$category) {
+        try {
+            if (!is_numeric($id) || $id <= 0) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Invalid category ID',
+                    'error' => 'The provided category ID is invalid.',
+                ], 400);
+            }
+
+            $category = Category::find($id);
+            
+            if (!$category) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Category not found',
+                    'error' => 'The requested category does not exist.',
+                ], 404);
+            }
+            
             return response()->json([
-                'message' => 'Category not found',
-            ], 404);
+                'success' => true,
+                'message' => 'Category retrieved successfully',
+                'data' => [
+                    'category' => $category,
+                ]
+            ], 200);
+        } catch (\Exception $e) {
+            Log::error('Error fetching category: ' . $e->getMessage());
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to retrieve category',
+                'error' => 'An error occurred while fetching the category. Please try again later.',
+            ], 500);
         }
-        
-        return response()->json([
-            'message' => 'Category retrieved successfully',
-            'category' => $category,
-        ]);
     }
 
     /**
@@ -67,35 +133,81 @@ class CategoryController extends Controller
      */
     public function update(Request $request, $id)
     {
-        $category = Category::find($id);
-        
-        if (!$category) {
+        try {
+            if (!is_numeric($id) || $id <= 0) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Invalid category ID',
+                    'error' => 'The provided category ID is invalid.',
+                ], 400);
+            }
+
+            $category = Category::find($id);
+            
+            if (!$category) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Category not found',
+                    'error' => 'The requested category does not exist.',
+                ], 404);
+            }
+
+            $validated = $request->validate([
+                'name' => 'sometimes|string|max:255|unique:categories,name,' . $id,
+                'status' => 'sometimes|in:active,inactive',
+            ]);
+
+            DB::beginTransaction();
+
+            $updateData = [];
+            
+            if (isset($validated['name'])) {
+                $updateData['name'] = $validated['name'];
+            }
+            
+            if (isset($validated['status'])) {
+                $updateData['status'] = $validated['status'];
+            }
+
+            if (empty($updateData)) {
+                DB::rollBack();
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No data to update',
+                    'error' => 'Please provide at least one field to update.',
+                ], 400);
+            }
+
+            $category->update($updateData);
+
+            DB::commit();
+
             return response()->json([
-                'message' => 'Category not found',
-            ], 404);
+                'success' => true,
+                'message' => 'Category updated successfully',
+                'data' => [
+                    'category' => $category->fresh(),
+                ]
+            ], 200);
+        } catch (ValidationException $e) {
+            DB::rollBack();
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'error' => 'The provided data is invalid.',
+                'errors' => $e->errors(),
+            ], 422);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Error updating category: ' . $e->getMessage());
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to update category',
+                'error' => 'An error occurred while updating the category. Please try again later.',
+            ], 500);
         }
-
-        $request->validate([
-            'name' => 'sometimes|string|max:255|unique:categories,name,' . $id,
-            'status' => 'sometimes|in:active,inactive',
-        ]);
-
-        $updateData = [];
-        
-        if ($request->has('name')) {
-            $updateData['name'] = $request->name;
-        }
-        
-        if ($request->has('status')) {
-            $updateData['status'] = $request->status;
-        }
-
-        $category->update($updateData);
-
-        return response()->json([
-            'message' => 'Category updated successfully',
-            'category' => $category->fresh(),
-        ]);
     }
 
     /**
@@ -103,19 +215,54 @@ class CategoryController extends Controller
      */
     public function destroy($id)
     {
-        $category = Category::find($id);
-        
-        if (!$category) {
+        try {
+            if (!is_numeric($id) || $id <= 0) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Invalid category ID',
+                    'error' => 'The provided category ID is invalid.',
+                ], 400);
+            }
+
+            $category = Category::find($id);
+            
+            if (!$category) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Category not found',
+                    'error' => 'The requested category does not exist.',
+                ], 404);
+            }
+
+            DB::beginTransaction();
+
+            // Check if category has products
+            if ($category->products()->count() > 0) {
+                DB::rollBack();
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Cannot delete category',
+                    'error' => 'This category has associated products. Please remove or reassign products before deleting.',
+                ], 409);
+            }
+
+            $category->delete();
+
+            DB::commit();
+
             return response()->json([
-                'message' => 'Category not found',
-            ], 404);
+                'success' => true,
+                'message' => 'Category deleted successfully',
+            ], 200);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Error deleting category: ' . $e->getMessage());
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to delete category',
+                'error' => 'An error occurred while deleting the category. Please try again later.',
+            ], 500);
         }
-
-        $category->delete();
-
-        return response()->json([
-            'message' => 'Category deleted successfully',
-        ]);
     }
 }
-

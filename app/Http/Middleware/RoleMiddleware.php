@@ -18,13 +18,17 @@ class RoleMiddleware
     {
         if (!$request->user()) {
             return response()->json([
-                'message' => 'Unauthenticated.',
+                'success' => false,
+                'message' => 'Unauthenticated',
+                'error' => 'Authentication required. Please provide a valid token.',
             ], 401);
         }
 
         if ($request->user()->role !== $role) {
             return response()->json([
-                'message' => 'Unauthorized. This action requires ' . $role . ' role.',
+                'success' => false,
+                'message' => 'Unauthorized',
+                'error' => 'This action requires ' . $role . ' role. You do not have permission to perform this action.',
             ], 403);
         }
 

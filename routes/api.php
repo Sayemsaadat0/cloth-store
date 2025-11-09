@@ -5,6 +5,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\AdminController;
 use App\Http\Controllers\Api\CategoryController;
+use App\Http\Controllers\Api\ProductController;
 
 /*
 |--------------------------------------------------------------------------
@@ -21,6 +22,21 @@ use App\Http\Controllers\Api\CategoryController;
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
 
+// Public Category routes (no authentication required)
+Route::get('/categories', [CategoryController::class, 'index']);
+Route::get('/categories/{id}', [CategoryController::class, 'show']);
+Route::put('/categories/{id}', [CategoryController::class, 'update']);
+Route::delete('/categories/{id}', [CategoryController::class, 'destroy']);
+
+// Protected Category routes (require authentication)
+Route::middleware('auth:sanctum')->group(function () {
+    Route::post('/categories', [CategoryController::class, 'store']);
+});
+
+// Public Product routes (no authentication required)
+Route::get('/products', [ProductController::class, 'index']);
+Route::get('/products/{id}', [ProductController::class, 'show']);
+
 // Protected routes (require authentication)
 Route::middleware('auth:sanctum')->group(function () {
     // User routes (authenticated users)
@@ -28,6 +44,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user', [AuthController::class, 'user']);
     Route::put('/user/update', [AuthController::class, 'update']);
     Route::delete('/user/delete', [AuthController::class, 'delete']);
+
+    // Product management routes (require authentication) - using POST for both create and update
+    Route::post('/products', [ProductController::class, 'store']);
+    Route::post('/products/{id}', [ProductController::class, 'update']);
+    Route::delete('/products/{id}', [ProductController::class, 'destroy']);
 
     // Admin routes (require admin role)
     Route::middleware('role:admin')->prefix('admin')->group(function () {
@@ -37,9 +58,6 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/users', [AdminController::class, 'store']);
         Route::put('/users/{id}', [AdminController::class, 'update']);
         Route::delete('/users/{id}', [AdminController::class, 'destroy']);
-        
-        // Category routes (Admin only)
-        Route::apiResource('categories', CategoryController::class);
     });
 });
 

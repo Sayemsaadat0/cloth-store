@@ -7,8 +7,6 @@ use App\Models\Product;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
 class ProductController extends Controller
@@ -71,51 +69,19 @@ class ProductController extends Controller
     public function store(Request $request)
     {
         try {
+            // Validate request data
             $validated = $request->validate([
                 'name' => 'required|string|max:255',
-                'thumbnail' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048',
+                'thumbnail' => 'nullable|string|url|max:2048',
                 'description' => 'nullable|string',
                 'category_id' => 'required|exists:categories,id',
             ]);
 
             DB::beginTransaction();
 
-            // Handle file upload
-            $thumbnailPath = null;
-            if ($request->hasFile('thumbnail')) {
-                try {
-                    $file = $request->file('thumbnail');
-                    
-                    // Validate file size
-                    if ($file->getSize() > 2048 * 1024) {
-                        DB::rollBack();
-                        return response()->json([
-                            'success' => false,
-                            'message' => 'File too large',
-                            'error' => 'The thumbnail file size must not exceed 2MB.',
-                        ], 413);
-                    }
-
-                    $filename = Str::random(20) . '_' . time() . '.' . $file->getClientOriginalExtension();
-                    // Use Storage facade for proper file handling
-                    $thumbnailPath = $file->storeAs('public', $filename);
-                    // Get the public URL path (without 'public/' prefix for database storage)
-                    $thumbnailPath = str_replace('public/', '', $thumbnailPath);
-                } catch (\Exception $e) {
-                    DB::rollBack();
-                    Log::error('Error uploading file: ' . $e->getMessage());
-                    
-                    return response()->json([
-                        'success' => false,
-                        'message' => 'File upload failed',
-                        'error' => 'An error occurred while uploading the thumbnail. Please try again.',
-                    ], 500);
-                }
-            }
-
             $product = Product::create([
                 'name' => $validated['name'],
-                'thumbnail' => $thumbnailPath,
+                'thumbnail' => $validated['thumbnail'] ?? null,
                 'description' => $validated['description'] ?? null,
                 'category_id' => $validated['category_id'],
             ]);
@@ -142,12 +108,14 @@ class ProductController extends Controller
             ], 422);
         } catch (\Exception $e) {
             DB::rollBack();
-            Log::error('Error creating product: ' . $e->getMessage());
+            Log::error('Error creating product: ' . $e->getMessage() . ' | File: ' . $e->getFile() . ' | Line: ' . $e->getLine() . ' | Trace: ' . $e->getTraceAsString());
             
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to create product',
-                'error' => 'An error occurred while creating the product. Please try again later.',
+                'error' => config('app.debug') 
+                    ? $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine()
+                    : 'An error occurred while creating the product. Please try again later.',
             ], 500);
         }
     }
@@ -220,7 +188,7 @@ class ProductController extends Controller
 
             $validated = $request->validate([
                 'name' => 'sometimes|string|max:255',
-                'thumbnail' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048',
+                'thumbnail' => 'nullable|string|url|max:2048',
                 'description' => 'nullable|string',
                 'category_id' => 'sometimes|exists:categories,id',
             ]);
@@ -241,45 +209,8 @@ class ProductController extends Controller
                 $updateData['category_id'] = $validated['category_id'];
             }
 
-            // Handle file upload
-            if ($request->hasFile('thumbnail')) {
-                try {
-                    $file = $request->file('thumbnail');
-                    
-                    // Validate file size
-                    if ($file->getSize() > 2048 * 1024) {
-                        DB::rollBack();
-                        return response()->json([
-                            'success' => false,
-                            'message' => 'File too large',
-                            'error' => 'The thumbnail file size must not exceed 2MB.',
-                        ], 413);
-                    }
-
-                    // Delete old thumbnail if exists
-                    if ($product->thumbnail && Storage::disk('public')->exists($product->thumbnail)) {
-                        try {
-                            Storage::disk('public')->delete($product->thumbnail);
-                        } catch (\Exception $e) {
-                            Log::warning('Error deleting old thumbnail: ' . $e->getMessage());
-                        }
-                    }
-
-                    $filename = Str::random(20) . '_' . time() . '.' . $file->getClientOriginalExtension();
-                    // Use Storage facade for proper file handling
-                    $thumbnailPath = $file->storeAs('public', $filename);
-                    // Get the public URL path (without 'public/' prefix for database storage)
-                    $updateData['thumbnail'] = str_replace('public/', '', $thumbnailPath);
-                } catch (\Exception $e) {
-                    DB::rollBack();
-                    Log::error('Error uploading file: ' . $e->getMessage());
-                    
-                    return response()->json([
-                        'success' => false,
-                        'message' => 'File upload failed',
-                        'error' => 'An error occurred while uploading the thumbnail. Please try again.',
-                    ], 500);
-                }
+            if (isset($validated['thumbnail'])) {
+                $updateData['thumbnail'] = $validated['thumbnail'];
             }
 
             if (empty($updateData)) {
@@ -350,14 +281,6 @@ class ProductController extends Controller
 
             DB::beginTransaction();
 
-            // Delete thumbnail file if exists
-            if ($product->thumbnail && Storage::disk('public')->exists($product->thumbnail)) {
-                try {
-                    Storage::disk('public')->delete($product->thumbnail);
-                } catch (\Exception $e) {
-                    Log::warning('Error deleting thumbnail file: ' . $e->getMessage());
-                }
-            }
 
             $product->delete();
 

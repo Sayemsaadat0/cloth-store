@@ -31,6 +31,8 @@ class Product extends Model
 
     /**
      * Get the full URL for the product thumbnail.
+     * Returns the value as-is if it's already a full URL (http:// or https://),
+     * otherwise prepends the base URL for relative paths.
      *
      * @return string|null
      */
@@ -40,6 +42,12 @@ class Product extends Model
             return null;
         }
 
+        // If it's already a full URL (starts with http:// or https://), return as-is
+        if (preg_match('/^https?:\/\//', $value)) {
+            return $value;
+        }
+
+        // Otherwise, treat it as a relative path and prepend base URL
         $assetUrl = config('app.asset_url');
         
         if ($assetUrl) {

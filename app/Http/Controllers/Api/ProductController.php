@@ -7,6 +7,7 @@ use App\Models\Product;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
@@ -96,8 +97,10 @@ class ProductController extends Controller
                     }
 
                     $filename = Str::random(20) . '_' . time() . '.' . $file->getClientOriginalExtension();
-                    $file->move(public_path(), $filename);
-                    $thumbnailPath = $filename;
+                    // Use Storage facade for proper file handling
+                    $thumbnailPath = $file->storeAs('public', $filename);
+                    // Get the public URL path (without 'public/' prefix for database storage)
+                    $thumbnailPath = str_replace('public/', '', $thumbnailPath);
                 } catch (\Exception $e) {
                     DB::rollBack();
                     Log::error('Error uploading file: ' . $e->getMessage());
@@ -254,17 +257,19 @@ class ProductController extends Controller
                     }
 
                     // Delete old thumbnail if exists
-                    if ($product->thumbnail && file_exists(public_path($product->thumbnail))) {
+                    if ($product->thumbnail && Storage::disk('public')->exists($product->thumbnail)) {
                         try {
-                            unlink(public_path($product->thumbnail));
+                            Storage::disk('public')->delete($product->thumbnail);
                         } catch (\Exception $e) {
                             Log::warning('Error deleting old thumbnail: ' . $e->getMessage());
                         }
                     }
 
                     $filename = Str::random(20) . '_' . time() . '.' . $file->getClientOriginalExtension();
-                    $file->move(public_path(), $filename);
-                    $updateData['thumbnail'] = $filename;
+                    // Use Storage facade for proper file handling
+                    $thumbnailPath = $file->storeAs('public', $filename);
+                    // Get the public URL path (without 'public/' prefix for database storage)
+                    $updateData['thumbnail'] = str_replace('public/', '', $thumbnailPath);
                 } catch (\Exception $e) {
                     DB::rollBack();
                     Log::error('Error uploading file: ' . $e->getMessage());
@@ -346,9 +351,9 @@ class ProductController extends Controller
             DB::beginTransaction();
 
             // Delete thumbnail file if exists
-            if ($product->thumbnail && file_exists(public_path($product->thumbnail))) {
+            if ($product->thumbnail && Storage::disk('public')->exists($product->thumbnail)) {
                 try {
-                    unlink(public_path($product->thumbnail));
+                    Storage::disk('public')->delete($product->thumbnail);
                 } catch (\Exception $e) {
                     Log::warning('Error deleting thumbnail file: ' . $e->getMessage());
                 }
